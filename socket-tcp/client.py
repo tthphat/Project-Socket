@@ -3,14 +3,40 @@ import time
 import threading
 import os
 from tkinter import filedialog
-import sys
-from tqdm import tqdm #hiện thanh giá trị download
+from tqdm import tqdm
 
 
-host = "127.0.0.1"
-port = 55000
+host = "172.172.26.163"
+port = 65432 
 FORMAT = "utf8"
 progress = [0] * 4
+
+
+def perform_handshake_client(client_socket):
+    """Thực hiện bắt tay ba bước từ phía client."""
+    try:
+        # Gửi SYN đến server
+        client_socket.sendall("SYN".encode(FORMAT))
+        time.sleep(0.5)
+        
+        
+
+
+        # Nhận SYN-ACK từ server
+        syn_ack_message = client_socket.recv(1024).decode(FORMAT)
+        if syn_ack_message != "SYN-ACK":
+            raise Exception("Không nhận được SYN-ACK từ server.")
+
+
+        # Gửi ACK đến server
+        client_socket.sendall("ACK".encode(FORMAT))
+        time.sleep(0.5)
+        
+        print("Three-way handshake thành công với server.")
+        return True
+    except Exception as e:
+        print(f"Lỗi trong bắt tay ba bước: {e}")
+        return False
 
 
 def read_new_files(file_name, already_downloaded):
@@ -25,6 +51,8 @@ def read_new_files(file_name, already_downloaded):
     except Exception as e:
         print(f"Có lỗi khi đọc file '{file_name}': {e}")
         return []
+
+
 
 
 def merge_chunks(chunks, output_file):
@@ -46,6 +74,8 @@ def merge_chunks(chunks, output_file):
         print(f"Lỗi khi tạo file {output_file}: {e}")
 
 
+
+
 def download_chunk(host, port, file_name, chunk_paths, chunk_index, start, end, download_folder_path, total_progress):
     """Tải xuống một chunk từ server."""
     try:
@@ -53,24 +83,31 @@ def download_chunk(host, port, file_name, chunk_paths, chunk_index, start, end, 
         client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client_socket.connect((host, port))
         client_socket.sendall("CHUNK".encode(FORMAT))  # Gửi tín hiệu là chunk
+        time.sleep(0.5)
+
 
         response = client_socket.recv(1024).decode(FORMAT)
         if response != "READY":
             raise Exception("Server không sẵn sàng để nhận chunk.")
 
+
         # Gửi yêu cầu tải chunk với start và end
         request = f"CHUNK_REQUEST:{file_name}:{chunk_index}:{start}:{end}"
         client_socket.sendall(request.encode(FORMAT))
+        time.sleep(0.5)
+
 
         # Nhận phản hồi bắt đầu
         response = client_socket.recv(1024).decode(FORMAT).strip()
         if response != "DATA_START":
             raise Exception("Không nhận được tín hiệu bắt đầu dữ liệu.")
 
+
         # Nhận dữ liệu chunk
         chunk_data = bytearray()
         total_received = 0
         chunk_size = end - start + 1
+
 
         # Tạo thanh tiến trình cho chunk
         chunk_progress = tqdm(
@@ -80,6 +117,7 @@ def download_chunk(host, port, file_name, chunk_paths, chunk_index, start, end, 
             unit_scale=True,
             position=chunk_index
         )
+
 
         while total_received < chunk_size:
             packet = client_socket.recv(min(1024, chunk_size - total_received))
@@ -93,24 +131,30 @@ def download_chunk(host, port, file_name, chunk_paths, chunk_index, start, end, 
             chunk_progress.update(len(packet))
             # Cập nhật tiến trình tổng
             total_progress[0] += len(packet)
-            time.sleep(0.1)
+            time.sleep(0.05)
 
-        time.sleep(1)
+
         chunk_progress.close()
+
 
         # Nhận tín hiệu kết thúc
         response = client_socket.recv(1024).decode(FORMAT).strip()
         if response != "DATA_END":
             raise Exception("Không nhận được tín hiệu kết thúc dữ liệu.")
 
+
         # Lưu dữ liệu chunk
         chunk_paths[chunk_index] = chunk_data
+
 
     except Exception as e:
         print(f"Lỗi khi tải chunk {chunk_index}: {e}")
     finally:
         client_socket.close()
         chunk_progress.close()
+
+
+
 
 def download_file(client, file_name):
     """Tải xuống file từ server theo từng chunk."""
@@ -124,6 +168,7 @@ def download_file(client, file_name):
         if not download_folder_path:
             print("Chưa chọn thư mục tải về. Hủy quá trình tải.")
             client.sendall("CANCEL".encode(FORMAT))
+            time.sleep(1)
             return
 
 
@@ -136,13 +181,13 @@ def download_file(client, file_name):
 
 
         # Tạo thanh tiến trình tổng
-        total_bar = tqdm(
-            total=file_size,
-            desc="Tổng tiến trình",
-            unit="B",
-            unit_scale=True,
-            position=num_chunks
-        )
+        # total_bar = tqdm(
+        #     total=file_size,
+        #     desc="Tổng tiến trình",
+        #     unit="B",
+        #     unit_scale=True,
+        #     position=num_chunks
+        # )
 
 
         for i in range(num_chunks):
@@ -155,17 +200,21 @@ def download_file(client, file_name):
             threads.append(thread)
             thread.start()
 
-        # Cập nhật thanh tiến trình tổng trong khi tải
-        while any(thread.is_alive() for thread in threads):
-            total_bar.n = total_progress[0]
-            total_bar.refresh()
-            time.sleep(0.1)
 
-        time.sleep(1)
+        # Cập nhật thanh tiến trình tổng trong khi tải
+        # while any(thread.is_alive() for thread in threads):
+        #     total_bar.n = total_progress[0]
+        #     total_bar.refresh()
+        #     time.sleep(0.1)
+
         # Chờ tất cả các thread hoàn thành
         for thread in threads:
             thread.join()
+
+
         total_bar.close()
+
+
         # Gộp các chunk lại thành file hoàn chỉnh
         output_file_path = os.path.join(download_folder_path, file_name)
         with open(output_file_path, 'wb') as f:
@@ -174,7 +223,9 @@ def download_file(client, file_name):
                     f.write(chunk_data)
 
 
+        time.sleep(2)
         print(f"File '{file_name}' đã được tải xuống thành công tại {output_file_path}.")
+
 
     except Exception as e:
         print(f"Lỗi khi tải file: {e}")
@@ -192,9 +243,16 @@ def monitor(client, file_name):
             else:
                 print("Không có File cần tải xuống!")
 
+
+
+
             for file in new_files:
                 client.sendall(file.encode(FORMAT))
+                time.sleep(1)
                 response = client.recv(1024).decode(FORMAT)
+
+
+
 
                 if response == "OK":
                     download_file(client, file)
@@ -203,6 +261,9 @@ def monitor(client, file_name):
                     print(f"Không thể tải file '{file}'.")
                 already_downloaded.add(file) # Đánh dấu file đã tải
 
+
+
+
             time.sleep(5)  # Chờ 5 giây trước khi quét lại
     except KeyboardInterrupt:
         print("\nDừng giám sát file.")
@@ -210,11 +271,20 @@ def monitor(client, file_name):
         print(f"Có lỗi xảy ra: {e}")
 
 
+
+
 def main():
     try:
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client.connect((host, port))
+        client.connect((host, port))        
         client.sendall("CLIENT".encode(FORMAT))
+        time.sleep(1)
+
+
+        if not perform_handshake_client(client):
+            print("Handshake thất bại với server.")
+            return
+       
         list_files = client.recv(1024).decode(FORMAT)
         print("Danh sách file từ server:")
         print(list_files)
@@ -223,5 +293,186 @@ def main():
         print(f"Có lỗi khi kết nối đến server: {e}")
     finally:
         print("Client đã thoát.")
+
+
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
